@@ -1,0 +1,6 @@
+[package]
+name = "fungine"
+version = "0.1.0"
+authors = ["Mike Goddard"]
+
+[dependencies]
