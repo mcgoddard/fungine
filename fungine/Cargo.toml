@@ -4,3 +4,4 @@ version = "0.1.0"
 authors = ["Mike Goddard"]
 
 [dependencies]
+downcast-rs = "0.1.2"
