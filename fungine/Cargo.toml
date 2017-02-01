@@ -5,3 +5,4 @@ authors = ["Mike Goddard"]
 
 [dependencies]
 downcast-rs = "0.1.2"
+stopwatch = "0.0.7"

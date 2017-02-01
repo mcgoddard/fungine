@@ -8,3 +8,6 @@
 
 # Vagrant machine directory
 .vagrant
+
+# OSX directories
+.Trash-1000

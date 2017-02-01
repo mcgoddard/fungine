@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate downcast_rs;
+extern crate stopwatch;
 
 mod fungine {
 	use std::sync::Arc;
@@ -52,6 +53,7 @@ mod fungine {
 mod tests {
 	use std::sync::Arc;
 	use fungine::{ Fungine, GameObject, Message };
+	use stopwatch::{Stopwatch};
 
 	#[derive(Clone)]
 	struct TestGameObject {
@@ -84,5 +86,31 @@ mod tests {
     	else {
     		assert!(false);
     	}
+    }
+
+    #[test]
+    fn speed_test() {
+    	let mut initial_state = Vec::new();
+    	for _ in 0..1000 {
+    		let initial_object = TestGameObject {
+    			value: 0
+    		};
+    		let initial_object = Box::new(initial_object) as Box<GameObject>;
+    		initial_state.push(initial_object);
+    	}
+    	let sw = Stopwatch::start_new();
+    	let mut current_state = Fungine::step_engine(Arc::new(initial_state));
+    	for _ in 0..1000 {
+    		current_state = Fungine::step_engine(current_state);
+    	}
+    	for x in 0..current_state.len() {
+    		if let Some(object) = current_state[x].downcast_ref::<TestGameObject>() {
+    			assert!(object.value == 1001);
+	    	}
+	    	else {
+	    		assert!(false);
+	    	}
+    	}
+    	println!("Time taken: {}ms", sw.elapsed_ms());
     }
 }
