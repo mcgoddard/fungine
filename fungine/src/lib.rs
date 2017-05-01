@@ -1,17 +1,23 @@
 #[macro_use]
 extern crate downcast_rs;
 extern crate stopwatch;
+extern crate num_cpus;
 
 mod fungine {
+	use std::thread;
 	use std::sync::Arc;
+	use std::sync::mpsc::Sender;
+	use std::sync::mpsc::Receiver;
+	use std::sync::mpsc;
 	use downcast_rs::Downcast;
+	use num_cpus;
 
 	pub struct Message {
 
 	}
 
 	pub trait GameObject: Downcast {
-		fn update(self: Box<Self>, current_state: &Vec<Box<GameObject>>, messages: Vec<Message>) -> Box<GameObject>;
+		fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, messages: Vec<Message>) -> Box<GameObject+Send+Sync>;
 		fn box_clone(&self) -> Box<GameObject>;
 	}
 	impl_downcast!(GameObject);
@@ -24,25 +30,75 @@ mod fungine {
 	}
 
 	pub struct Fungine {
-		initial_state: Vec<Box<GameObject>>,
+		initial_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>,
+		sends: Vec<Sender<(Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>)>>,
+		receiver: Receiver<Arc<Box<GameObject+Send+Sync>>>
 	}
 
 	impl Fungine {
-		pub fn run(self) {
-			let mut states: Arc<Vec<Box<GameObject>>> = Arc::new(self.initial_state);
-			loop {
-				states = Fungine::step_engine(states);
+		pub fn new(initial_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>) -> Fungine {
+			let (send_modified, receive_modified) = mpsc::channel();
+			let receiver = receive_modified;
+			let mut sends = vec![];
+
+			for _ in 0..num_cpus::get() {
+				let send_modified = send_modified.clone();
+				let (send_original, receive_original) = mpsc::channel();
+				sends.push(send_original);
+
+				thread::spawn(move || {
+					loop {
+						match receive_original.recv() {
+							Ok(original) => {
+								let original: (Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>) = original;
+								let current_object: Arc<Box<GameObject+Send+Sync>> = original.clone().0.clone();
+								let current_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = original.clone().1.clone();
+								let messages: Vec<Message> = Vec::new();
+								let new = current_object.update(current_state, messages);
+								send_modified.send(Arc::new(new)).unwrap();
+							},
+							Err(_) => {
+								break;
+							}
+						}
+					}
+				});
+			}
+
+			Fungine {
+				initial_state: initial_state,
+				sends: sends,
+				receiver: receiver
 			}
 		}
 
-		pub fn step_engine(states: Arc<Vec<Box<GameObject>>>) -> Arc<Vec<Box<GameObject>>> {
-			let mut next_states: Vec<Box<GameObject>> = Vec::new();
+		pub fn run(mut self) {
+			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
+
+			loop {
+				states = Fungine::step_engine(states, self.sends.clone(), &self.receiver);
+			}
+		}
+
+		pub fn run_steps(mut self, steps: u32) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
+			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
+
+			for _ in 0..steps {
+				states = Fungine::step_engine(states, self.sends.clone(), &self.receiver);
+			}
+
+			states
+		}
+
+		fn step_engine(states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, sends: Vec<Sender<(Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>)>>, receiver: &Receiver<Arc<Box<GameObject+Send+Sync>>>) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
 			for x in 0..states.len() {
 				let states = states.clone();
-				let messages: Vec<Message> = Vec::new();
 				let state = states[x].clone();
-				let next_state = state.update(&states, messages);
-				next_states.push(next_state);
+				sends[x % sends.len()].send((state, states)).unwrap();
+			}
+			let mut next_states: Vec<Arc<Box<GameObject+Send+Sync>>> = vec![];
+			for _ in 0..states.len() {
+				next_states.push(receiver.recv().unwrap());
 			}
 			Arc::new(next_states)
 		}
@@ -52,6 +108,9 @@ mod fungine {
 #[cfg(test)]
 mod tests {
 	use std::sync::Arc;
+	use std::sync::mpsc::Sender;
+	use std::sync::mpsc::Receiver;
+	use std::any::Any;
 	use fungine::{ Fungine, GameObject, Message };
 	use stopwatch::{Stopwatch};
 
@@ -65,22 +124,29 @@ mod tests {
 	        Box::new((*self).clone())
 	    }
 
-	    fn update(self: Box<Self>, current_state: &Vec<Box<GameObject>>, messages: Vec<Message>) -> Box<GameObject> {
+	    fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, messages: Vec<Message>) -> Box<GameObject+Send+Sync> {
 	    	Box::new(TestGameObject {
 	    		value: self.value + 1
 	    	})
 	    }
 	}
+	unsafe impl Send for TestGameObject {}
+	unsafe impl Sync for TestGameObject {}
 
-    #[test]
+
+	#[test]
     fn test_iterate() {
     	let initial_object = TestGameObject {
     		value: 0
     	};
-    	let initial_object = Box::new(initial_object) as Box<GameObject>;
+    	let initial_object = Box::new(initial_object) as Box<GameObject+Send+Sync>;
+		let initial_object = Arc::new(initial_object);
     	let initial_state = Arc::new(vec![initial_object]);
-    	let next_state = Fungine::step_engine(initial_state);
-    	if let Some(next_object) = next_state[0].downcast_ref::<TestGameObject>() {
+    	let engine = Fungine::new(initial_state);
+		let next_states = engine.run_steps(1);
+		let next_state = next_states[0].clone();
+		let next_state: Box<GameObject> = next_state.box_clone();
+    	if let Some(next_object) = next_state.downcast_ref::<TestGameObject>() {
     		assert!(next_object.value == 1);
     	}
     	else {
@@ -95,22 +161,23 @@ mod tests {
     		let initial_object = TestGameObject {
     			value: 0
     		};
-    		let initial_object = Box::new(initial_object) as Box<GameObject>;
+    		let initial_object = Box::new(initial_object) as Box<GameObject+Send+Sync>;
+			let initial_object = Arc::new(initial_object);
     		initial_state.push(initial_object);
     	}
+		let engine = Fungine::new(Arc::new(initial_state));
     	let sw = Stopwatch::start_new();
-    	let mut current_state = Fungine::step_engine(Arc::new(initial_state));
-    	for _ in 0..1000 {
-    		current_state = Fungine::step_engine(current_state);
-    	}
-    	for x in 0..current_state.len() {
-    		if let Some(object) = current_state[x].downcast_ref::<TestGameObject>() {
-    			assert!(object.value == 1001);
+    	let final_states = engine.run_steps(1000);
+		println!("Time taken: {}ms", sw.elapsed_ms());
+    	for x in 0..final_states.len() {
+			let final_state = final_states[x].clone();
+			let final_state: Box<GameObject> = final_state.box_clone();
+    		if let Some(object) = final_state.downcast_ref::<TestGameObject>() {
+    			assert!(object.value == 1000);
 	    	}
 	    	else {
 	    		assert!(false);
 	    	}
     	}
-    	println!("Time taken: {}ms", sw.elapsed_ms());
     }
 }

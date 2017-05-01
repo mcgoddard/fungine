@@ -11,3 +11,7 @@
 
 # OSX directories
 .Trash-1000
+.DS_Store
+
+# intellij files
+fungine/.idea/workspace.xml
