@@ -3,7 +3,7 @@ extern crate downcast_rs;
 extern crate stopwatch;
 extern crate num_cpus;
 
-mod fungine {
+pub mod fungine {
 	use std::thread;
 	use std::sync::Arc;
 	use std::sync::mpsc::Sender;
@@ -72,7 +72,7 @@ mod fungine {
 			}
 		}
 
-		pub fn run(mut self) {
+		pub fn run(self) {
 			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
 
 			loop {
@@ -80,7 +80,7 @@ mod fungine {
 			}
 		}
 
-		pub fn run_steps(mut self, steps: u32) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
+		pub fn run_steps(self, steps: u32) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
 			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
 
 			for _ in 0..steps {
@@ -108,9 +108,6 @@ mod fungine {
 #[cfg(test)]
 mod tests {
 	use std::sync::Arc;
-	use std::sync::mpsc::Sender;
-	use std::sync::mpsc::Receiver;
-	use std::any::Any;
 	use fungine::{ Fungine, GameObject, Message };
 	use stopwatch::{Stopwatch};
 
