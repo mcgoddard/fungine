@@ -2,7 +2,7 @@
 extern crate downcast_rs;
 extern crate stopwatch;
 
-mod fungine {
+pub mod fungine {
 	use std::sync::Arc;
 	use downcast_rs::Downcast;
 
