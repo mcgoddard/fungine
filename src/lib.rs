@@ -79,17 +79,6 @@ pub mod fungine {
 				}
 			}
 			Arc::new(next_states)
-
-//			for x in 0..states.len() {
-//				let states = states.clone();
-//				let state = states[x].clone();
-//				sends[x % sends.len()].send((state, states)).unwrap();
-//			}
-//			let mut next_states: Vec<Arc<Box<GameObject+Send+Sync>>> = vec![];
-//			for _ in 0..states.len() {
-//				next_states.push(receiver.recv().unwrap());
-//			}
-//			Arc::new(next_states)
 		}
 	}
 }
