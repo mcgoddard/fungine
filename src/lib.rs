@@ -1,16 +1,14 @@
 #[macro_use]
 extern crate downcast_rs;
 extern crate stopwatch;
-extern crate num_cpus;
+extern crate futures;
+extern crate futures_cpupool;
 
 pub mod fungine {
-	use std::thread;
 	use std::sync::Arc;
-	use std::sync::mpsc::Sender;
-	use std::sync::mpsc::Receiver;
-	use std::sync::mpsc;
 	use downcast_rs::Downcast;
-	use num_cpus;
+	use futures::Future;
+	use futures_cpupool::{CpuPool, CpuFuture};
 
 	pub struct Message {
 
@@ -31,44 +29,16 @@ pub mod fungine {
 
 	pub struct Fungine {
 		initial_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>,
-		sends: Vec<Sender<(Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>)>>,
-		receiver: Receiver<Arc<Box<GameObject+Send+Sync>>>
+		pool: CpuPool
 	}
 
 	impl Fungine {
 		pub fn new(initial_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>) -> Fungine {
-			let (send_modified, receive_modified) = mpsc::channel();
-			let receiver = receive_modified;
-			let mut sends = vec![];
-
-			for _ in 0..num_cpus::get() {
-				let send_modified = send_modified.clone();
-				let (send_original, receive_original) = mpsc::channel();
-				sends.push(send_original);
-
-				thread::spawn(move || {
-					loop {
-						match receive_original.recv() {
-							Ok(original) => {
-								let original: (Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>) = original;
-								let current_object: Arc<Box<GameObject+Send+Sync>> = original.clone().0.clone();
-								let current_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = original.clone().1.clone();
-								let messages: Vec<Message> = Vec::new();
-								let new = current_object.update(current_state, messages);
-								send_modified.send(Arc::new(new)).unwrap();
-							},
-							Err(_) => {
-								break;
-							}
-						}
-					}
-				});
-			}
+			let pool = CpuPool::new_num_cpus();
 
 			Fungine {
 				initial_state: initial_state,
-				sends: sends,
-				receiver: receiver
+				pool: pool
 			}
 		}
 
@@ -76,7 +46,7 @@ pub mod fungine {
 			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
 
 			loop {
-				states = Fungine::step_engine(states, self.sends.clone(), &self.receiver);
+				states = Fungine::step_engine(states, &self.pool);
 			}
 		}
 
@@ -84,23 +54,42 @@ pub mod fungine {
 			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
 
 			for _ in 0..steps {
-				states = Fungine::step_engine(states, self.sends.clone(), &self.receiver);
+				states = Fungine::step_engine(states, &self.pool);
 			}
 
 			states
 		}
 
-		fn step_engine(states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, sends: Vec<Sender<(Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>)>>, receiver: &Receiver<Arc<Box<GameObject+Send+Sync>>>) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
+		fn step_engine(states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, pool: &CpuPool) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
+			let mut next_states: Vec<Arc<Box<GameObject+Send+Sync>>> = vec![];
+			let mut futures = vec![];
 			for x in 0..states.len() {
 				let states = states.clone();
 				let state = states[x].clone();
-				sends[x % sends.len()].send((state, states)).unwrap();
+				let future: CpuFuture<Box<GameObject+Send+Sync>, String> = pool.spawn_fn(move || {
+					let messages: Vec<Message> = Vec::new();
+					Ok(state.update(states, messages))
+				});
+				futures.push(future);
 			}
-			let mut next_states: Vec<Arc<Box<GameObject+Send+Sync>>> = vec![];
-			for _ in 0..states.len() {
-				next_states.push(receiver.recv().unwrap());
+			for future in futures {
+				match future.wait() {
+					Ok(s) => next_states.push(Arc::new(s)),
+					Err(_) => panic!("Future failed to return")
+				}
 			}
 			Arc::new(next_states)
+
+//			for x in 0..states.len() {
+//				let states = states.clone();
+//				let state = states[x].clone();
+//				sends[x % sends.len()].send((state, states)).unwrap();
+//			}
+//			let mut next_states: Vec<Arc<Box<GameObject+Send+Sync>>> = vec![];
+//			for _ in 0..states.len() {
+//				next_states.push(receiver.recv().unwrap());
+//			}
+//			Arc::new(next_states)
 		}
 	}
 }
