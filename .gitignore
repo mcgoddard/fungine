@@ -6,12 +6,13 @@ target/
 # More information here http://doc.crates.io/guide.html#cargotoml-vs-cargolock
 Cargo.lock
 
-# Vagrant machine directory
-.vagrant
-
 # OSX directories
 .DS_Store
 .Trash-1000
 
 # Intellij files
+.DS_Store
+
+# intellij files
 .idea/workspace.xml
+.idea/libraries
