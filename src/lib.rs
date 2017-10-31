@@ -2,6 +2,11 @@
 extern crate downcast_rs;
 extern crate stopwatch;
 extern crate num_cpus;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate serde_json;
+extern crate erased_serde;
 
 pub mod fungine {
 	use std::thread;
@@ -12,13 +17,15 @@ pub mod fungine {
 	use std::net::UdpSocket;
 	use downcast_rs::Downcast;
 	use num_cpus;
+    use serde_json;
+    use erased_serde::Serialize;
 
 	pub struct Message {
 
 	}
 
-	pub trait GameObject: Downcast {
-		fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, messages: Vec<Message>) -> Box<GameObject+Send+Sync>;
+	pub trait GameObject: Downcast + Send + Sync + Serialize {
+		fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject>>>>, messages: Vec<Message>) -> Box<GameObject>;
 		fn box_clone(&self) -> Box<GameObject>;
 	}
 	impl_downcast!(GameObject);
@@ -31,15 +38,15 @@ pub mod fungine {
 	}
 
 	pub struct Fungine {
-		initial_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>,
-		sends: Vec<Sender<(Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>)>>,
-		receiver: Receiver<Arc<Box<GameObject+Send+Sync>>>,
+		initial_state: Arc<Vec<Arc<Box<GameObject>>>>,
+		sends: Vec<Sender<(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>)>>,
+		receiver: Receiver<Arc<Box<GameObject>>>,
 		socket: Option<UdpSocket>,
         port: Option<String>
 	}
 
 	impl Fungine {
-		pub fn new(initial_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, port: Option<String>) -> Fungine {
+		pub fn new(initial_state: Arc<Vec<Arc<Box<GameObject>>>>, port: Option<String>) -> Fungine {
 			let (send_modified, receive_modified) = mpsc::channel();
 			let receiver = receive_modified;
 			let mut sends = vec![];
@@ -62,9 +69,9 @@ pub mod fungine {
 					loop {
 						match receive_original.recv() {
 							Ok(original) => {
-								let original: (Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>) = original;
-								let current_object: Arc<Box<GameObject+Send+Sync>> = original.clone().0.clone();
-								let current_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = original.clone().1.clone();
+								let original: (Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>) = original;
+								let current_object: Arc<Box<GameObject>> = original.clone().0.clone();
+								let current_state: Arc<Vec<Arc<Box<GameObject>>>> = original.clone().1.clone();
 								let messages: Vec<Message> = Vec::new();
 								let new = current_object.update(current_state, messages);
 								send_modified.send(Arc::new(new)).unwrap();
@@ -88,15 +95,15 @@ pub mod fungine {
 		}
 
 		pub fn run(self) {
-			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
+			let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
 			loop {
 				states = Fungine::step_engine(&self.socket, self.port.clone(), states, self.sends.clone(), &self.receiver);
 			}
 		}
 
-		pub fn run_steps(self, steps: u32) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
-			let mut states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> = self.initial_state;
+		pub fn run_steps(self, steps: u32) -> Arc<Vec<Arc<Box<GameObject>>>> {
+			let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
 			for _ in 0..steps {
 				states = Fungine::step_engine(&self.socket, self.port.clone(), states, self.sends.clone(), &self.receiver);
@@ -105,21 +112,21 @@ pub mod fungine {
 			states
 		}
 
-		fn step_engine(socket: &Option<UdpSocket>, port: Option<String>, states: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, sends: Vec<Sender<(Arc<Box<GameObject+Send+Sync>>, Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>)>>, receiver: &Receiver<Arc<Box<GameObject+Send+Sync>>>) -> Arc<Vec<Arc<Box<GameObject+Send+Sync>>>> {
+		fn step_engine(socket: &Option<UdpSocket>, port: Option<String>, states: Arc<Vec<Arc<Box<GameObject>>>>, sends: Vec<Sender<(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>)>>, receiver: &Receiver<Arc<Box<GameObject>>>) -> Arc<Vec<Arc<Box<GameObject>>>> {
 			for x in 0..states.len() {
 				let states = states.clone();
 				let state = states[x].clone();
 				sends[x % sends.len()].send((state, states)).unwrap();
 			}
-			let mut next_states: Vec<Arc<Box<GameObject+Send+Sync>>> = vec![];
+			let mut next_states: Vec<Arc<Box<GameObject>>> = vec![];
 			for _ in 0..states.len() {
                 let state = receiver.recv().unwrap();
                 match *socket {
                     Some(ref s) => {
                         match port.clone() {
                             Some(p) => {
-                                // TODO serialize state
-                                let buf = [0; 10];
+//                                let serialized = serde_json::to_string(&state).unwrap();
+                                let buf = [10;3];
                                 let addr: String = format!("127.0.0.1:{}", p);
                                 match s.send_to(&buf, addr) {
                                     Ok(_) => {},
@@ -144,7 +151,7 @@ mod tests {
 	use fungine::{ Fungine, GameObject, Message };
 	use stopwatch::{Stopwatch};
 
-	#[derive(Clone)]
+	#[derive(Clone, Serialize, Deserialize, Debug)]
 	struct TestGameObject {
 		value: i32,
 	}
@@ -154,7 +161,7 @@ mod tests {
 	        Box::new((*self).clone())
 	    }
 
-	    fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject+Send+Sync>>>>, messages: Vec<Message>) -> Box<GameObject+Send+Sync> {
+	    fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject>>>>, messages: Vec<Message>) -> Box<GameObject> {
 	    	Box::new(TestGameObject {
 	    		value: self.value + 1
 	    	})
@@ -169,7 +176,7 @@ mod tests {
     	let initial_object = TestGameObject {
     		value: 0
     	};
-    	let initial_object = Box::new(initial_object) as Box<GameObject+Send+Sync>;
+    	let initial_object = Box::new(initial_object) as Box<GameObject>;
 		let initial_object = Arc::new(initial_object);
     	let initial_state = Arc::new(vec![initial_object]);
     	let engine = Fungine::new(initial_state, None);
@@ -191,7 +198,7 @@ mod tests {
     		let initial_object = TestGameObject {
     			value: 0
     		};
-    		let initial_object = Box::new(initial_object) as Box<GameObject+Send+Sync>;
+    		let initial_object = Box::new(initial_object) as Box<GameObject>;
 			let initial_object = Arc::new(initial_object);
     		initial_state.push(initial_object);
     	}
