@@ -17,12 +17,11 @@ pub mod fungine {
     use std::sync::mpsc;
     use std::net::UdpSocket;
     use std::collections::BTreeMap as Map;
-    use std::io;
+    use std::io::BufWriter;
     use std::ops::Deref;
     use downcast_rs::Downcast;
     use num_cpus;
     use serde_json;
-    use serde::Serialize;
     use erased_serde;
 
     pub struct Message {
@@ -131,27 +130,32 @@ pub mod fungine {
                     Some(ref s) => {
                         match port.clone() {
                             Some(p) => {
-                                let json = &mut serde_json::ser::Serializer::new(io::stdout());
-                                let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
-                                formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
-                                let mut values: Map<&str, Box<GameObject>> = Map::new();
-                                values.insert("state", state.deref().box_clone());
-                                let format = formats.get_mut("json").unwrap();
-                                let value = values.get("state").unwrap();
-                                value.erased_serialize(format).unwrap();
-                                // let serialized = state.serialize().unwrap();
-                                // let serialized = serde_json::to_string(&state).unwrap();
-                                let buf = [0;10];
+                                let mut buf = Vec::new();
+                                {
+                                    let buf = &mut buf;
+                                    let writer = BufWriter::new(buf);
+                                    let json = &mut serde_json::ser::Serializer::new(writer);
+                                    let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
+                                    formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
+                                    let mut values: Map<&str, Box<GameObject>> = Map::new();
+                                    values.insert("state", state.deref().box_clone());
+                                    let format = formats.get_mut("json").unwrap();
+                                    let value = values.get("state").unwrap();
+                                    value.erased_serialize(format).unwrap();
+                                }
+                                
                                 let addr: String = format!("127.0.0.1:{}", p);
-                                match s.send_to(&buf, addr) {
+                                let payload = buf.as_slice();
+
+                                match s.send_to(payload, addr) {
                                     Ok(_) => {},
                                     Err(e) => println!("Failed to send: {}", e)
                                 }
                             },
-                            None => {}
+                            None => { println!("No destination port") }
                         }
                     },
-                    None => {}
+                    None => { println!("No send socket") }
                 }
                 next_states.push(state);
             }
@@ -164,9 +168,12 @@ pub mod fungine {
 mod tests {
     use std::sync::Arc;
     use std::net::UdpSocket;
+    use std::str;
     use std::str::FromStr;
     use fungine::{ Fungine, GameObject, Message };
     use stopwatch::{Stopwatch};
+
+    use serde_json;
 
     #[derive(Clone, Serialize, Deserialize, Debug)]
     struct TestGameObject {
@@ -178,7 +185,7 @@ mod tests {
             Box::new((*self).clone())
         }
 
-        fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject>>>>, messages: Vec<Message>) -> Box<GameObject> {
+        fn update(&self, _current_state: Arc<Vec<Arc<Box<GameObject>>>>, _messages: Vec<Message>) -> Box<GameObject> {
             Box::new(TestGameObject {
                 value: self.value + 1
             })
@@ -201,7 +208,7 @@ mod tests {
         let next_state = next_states[0].clone();
         let next_state: Box<GameObject> = next_state.box_clone();
         if let Some(next_object) = next_state.downcast_ref::<TestGameObject>() {
-            assert!(next_object.value == 1);
+            assert_eq!(1, next_object.value);
         }
         else {
             assert!(false);
@@ -227,7 +234,7 @@ mod tests {
             let final_state = final_states[x].clone();
             let final_state: Box<GameObject> = final_state.box_clone();
             if let Some(object) = final_state.downcast_ref::<TestGameObject>() {
-                assert!(object.value == 1000);
+                assert_eq!(1000, object.value);
             }
             else {
                 assert!(false);
@@ -243,16 +250,33 @@ mod tests {
         let port = "4794";
         let soc = UdpSocket::bind(format!("127.0.0.1:{}", port));
         let socket = match soc {
-            Ok(s) => Some(s),
+            Ok(s) => s,
             Err(_) => panic!("Couldn't open listen socket")
         };
         let initial_object = Box::new(initial_object) as Box<GameObject>;
         let initial_object = Arc::new(initial_object);
         let initial_state = Arc::new(vec![initial_object]);
         let engine = Fungine::new(initial_state, Some(String::from_str(port)).unwrap().ok());
-        let _ = engine.run_steps(1);
-        let mut buf = [0; 1024];
-        let (amt, src) = socket.recv_from(&mut buf)?;
-
+        let final_states = engine.run_steps(1);
+        let mut buf = [0; 11];
+        let (amt, _) = match socket.recv_from(&mut buf)
+        {
+            Ok((a, s)) => (a, s),
+            Err(_) => panic!("Couldn't receive")
+        };
+        assert_eq!(11, amt);
+        let serialized = str::from_utf8(&buf).unwrap();
+        let serialized = &serialized[..amt];
+        let deserialized: TestGameObject = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(1, final_states.len());
+        for x in 0..final_states.len() {
+            let final_state = final_states[x].clone();
+            if let Some(object) = final_state.downcast_ref::<TestGameObject>() {
+                assert_eq!(object.value, deserialized.value);
+            }
+            else {
+                assert!(false);
+            }
+        }
     }
 }
