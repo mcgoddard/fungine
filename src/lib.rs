@@ -135,7 +135,6 @@ pub mod fungine {
                                 let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
                                 formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
                                 let mut values: Map<&str, Box<GameObject>> = Map::new();
-                                // values.insert("vec", Box::new(vec!["a", "b"]));
                                 values.insert("state", state.deref().box_clone());
                                 let format = formats.get_mut("json").unwrap();
                                 let value = values.get("state").unwrap();
