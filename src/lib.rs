@@ -335,10 +335,16 @@ mod tests {
             initial_state.push(initial_object);
         }
         let port = "4794";
+        let soc = UdpSocket::bind(format!("127.0.0.1:{}", port));
+        let socket = match soc {
+            Ok(s) => s,
+            Err(_) => panic!("Couldn't open listen socket")
+        };
         let engine = Fungine::new(Arc::new(initial_state), Some(String::from_str(port)).unwrap().ok());
         let sw = Stopwatch::start_new();
         let final_states = engine.run_steps(1000);
         println!("Time taken: {}ms", sw.elapsed_ms());
+        assert_eq!(1000, final_states.len());
         for x in 0..final_states.len() {
             let final_state = final_states[x].clone();
             let final_state: Box<GameObject> = final_state.box_clone();
@@ -349,5 +355,12 @@ mod tests {
                 assert!(false);
             }
         }
+        let mut buf = [0; 11];
+        let (amt, _) = match socket.recv_from(&mut buf)
+        {
+            Ok((a, s)) => (a, s),
+            Err(_) => panic!("Couldn't receive")
+        };
+        assert_eq!(11, amt);
     }
 }
