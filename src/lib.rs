@@ -2,12 +2,12 @@
 extern crate downcast_rs;
 extern crate stopwatch;
 extern crate num_cpus;
-#[macro_use]
-extern crate serde_derive;
 extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate erased_serde;
+#[macro_use]
+extern crate serde_derive;
 
 pub mod fungine {
     use std::thread;
@@ -53,9 +53,7 @@ pub mod fungine {
     pub struct Fungine {
         initial_state: Arc<Vec<Arc<Box<GameObject>>>>,
         sends: Vec<Sender<GameObjectWithState>>,
-        receiver: Receiver<Arc<Box<GameObject>>>,
-        socket: Option<UdpSocket>,
-        port: Option<String>
+        receiver: Receiver<Arc<Box<GameObject>>>
     }
 
     impl Fungine {
@@ -76,10 +74,57 @@ pub mod fungine {
                 },
                 None => None
             };
+            // Create channel for sending object to UDP worker thread.
+            let send_tx = match socket {
+                Some(socket) => {
+                    let (s_tx, r_tx) = mpsc::channel();
+                    thread::spawn(move || {
+                        loop {
+                            match r_tx.recv() {
+                                Ok(state) => {
+                                    let state: Arc<Box<GameObject>> = state;
+                                    // Send over networking
+                                    if let Some(p) = port.clone() {
+                                        let mut buf = Vec::new();
+                                        {
+                                            let buf = &mut buf;
+                                            let writer = BufWriter::new(buf);
+                                            let json = &mut serde_json::ser::Serializer::new(writer);
+                                            let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
+                                            formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
+                                            let mut values: Map<&str, Box<GameObject>> = Map::new();
+                                            values.insert("state", state.deref().box_clone());
+                                            let format = formats.get_mut("json").unwrap();
+                                            let value = &values["state"];
+                                            value.erased_serialize(format).unwrap();
+                                        }
+                                        
+                                        let addr: String = format!("127.0.0.1:{}", p);
+                                        let payload = buf.as_slice();
+
+                                        match socket.send_to(payload, addr) {
+                                            Ok(_) => {},
+                                            Err(e) => println!("Failed to send: {}", e)
+                                        }
+                                    }
+                                },
+                                Err(_) => {
+                                    // The channel has been closed so exit the worker
+                                    println!("Closing UDP thread");
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                    Some(s_tx)
+                },
+                None => None
+            };
             // Create worker threads
             let thread_count = num_cpus::get() - 1;
             for _ in 0..thread_count {
                 let send_modified = send_modified.clone();
+                let s_tx = send_tx.clone();
                 let (send_original, receive_original) = mpsc::channel();
                 sends.push(send_original);
 
@@ -87,6 +132,7 @@ pub mod fungine {
                     // A worker thread will pull GameObjects, execute their update method and send the new
                     // state back to the main thread.
                     loop {
+                        let s_tx = s_tx.clone();
                         match receive_original.recv() {
                             Ok(original) => {
                                 let original: GameObjectWithState = original;
@@ -94,7 +140,11 @@ pub mod fungine {
                                 let current_state: Arc<Vec<Arc<Box<GameObject>>>> = Arc::clone(&original.1);
                                 let messages: Vec<Message> = Vec::new();
                                 let new = current_object.update(current_state, messages);
-                                send_modified.send(Arc::new(new)).unwrap();
+                                let new_ref = Arc::new(new);
+                                send_modified.send(Arc::clone(&new_ref)).unwrap();
+                                if let Some(tx) = s_tx {
+                                    tx.send(new_ref).unwrap();
+                                }
                             },
                             Err(_) => {
                                 // The channel has been closed so exit the worker
@@ -109,9 +159,7 @@ pub mod fungine {
             Fungine {
                 initial_state: initial_state,
                 sends: sends,
-                receiver: receiver,
-                socket: socket,
-                port: port
+                receiver: receiver
             }
         }
 
@@ -120,7 +168,7 @@ pub mod fungine {
             let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
             loop {
-                states = Fungine::step_engine(&self.socket, &self.port, &states, &self.sends, &self.receiver);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver);
             }
         }
 
@@ -129,14 +177,14 @@ pub mod fungine {
             let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
             for _ in 0..steps {
-                states = Fungine::step_engine(&self.socket, &self.port, &states, &self.sends, &self.receiver);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver);
             }
 
             states
         }
 
         // Perform one step by processing each GameObject in the state once.
-        fn step_engine(socket: &Option<UdpSocket>, port: &Option<String>, states: &Arc<Vec<Arc<Box<GameObject>>>>, sends: &[Sender<GameObjectWithState>], receiver: &Receiver<Arc<Box<GameObject>>>) -> Arc<Vec<Arc<Box<GameObject>>>> {
+        fn step_engine(states: &Arc<Vec<Arc<Box<GameObject>>>>, sends: &[Sender<GameObjectWithState>], receiver: &Receiver<Arc<Box<GameObject>>>) -> Arc<Vec<Arc<Box<GameObject>>>> {
             // Send current states to the worker threads
             for x in 0..states.len() {
                 let states = Arc::clone(states);
@@ -147,32 +195,6 @@ pub mod fungine {
             // Collect new states
             for _ in 0..states.len() {
                 let state = receiver.recv().unwrap();
-                // Send over networking (if enabled)
-                if let Some(ref s) = *socket {
-                    if let Some(p) = port.clone() {
-                        let mut buf = Vec::new();
-                        {
-                            let buf = &mut buf;
-                            let writer = BufWriter::new(buf);
-                            let json = &mut serde_json::ser::Serializer::new(writer);
-                            let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
-                            formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
-                            let mut values: Map<&str, Box<GameObject>> = Map::new();
-                            values.insert("state", state.deref().box_clone());
-                            let format = formats.get_mut("json").unwrap();
-                            let value = &values["state"];
-                            value.erased_serialize(format).unwrap();
-                        }
-                        
-                        let addr: String = format!("127.0.0.1:{}", p);
-                        let payload = buf.as_slice();
-
-                        match s.send_to(payload, addr) {
-                            Ok(_) => {},
-                            Err(e) => println!("Failed to send: {}", e)
-                        }
-                    }
-                }
                 next_states.push(state);
             }
             Arc::new(next_states)
@@ -188,7 +210,6 @@ mod tests {
     use std::str::FromStr;
     use fungine::{ Fungine, GameObject, Message };
     use stopwatch::{Stopwatch};
-
     use serde_json;
 
     // A GameObject implementation with some state
@@ -294,6 +315,35 @@ mod tests {
             let final_state = final_states[x].clone();
             if let Some(object) = final_state.downcast_ref::<TestGameObject>() {
                 assert_eq!(object.value, deserialized.value);
+            }
+            else {
+                assert!(false);
+            }
+        }
+    }
+
+    // Run 1000 steps on 1000 boids to check state and benchmark speed
+    #[test]
+    fn speed_with_networking_test() {
+        let mut initial_state = Vec::new();
+        for _ in 0..1000 {
+            let initial_object = TestGameObject {
+                value: 0
+            };
+            let initial_object = Box::new(initial_object) as Box<GameObject>;
+            let initial_object = Arc::new(initial_object);
+            initial_state.push(initial_object);
+        }
+        let port = "4794";
+        let engine = Fungine::new(Arc::new(initial_state), Some(String::from_str(port)).unwrap().ok());
+        let sw = Stopwatch::start_new();
+        let final_states = engine.run_steps(1000);
+        println!("Time taken: {}ms", sw.elapsed_ms());
+        for x in 0..final_states.len() {
+            let final_state = final_states[x].clone();
+            let final_state: Box<GameObject> = final_state.box_clone();
+            if let Some(object) = final_state.downcast_ref::<TestGameObject>() {
+                assert_eq!(1000, object.value);
             }
             else {
                 assert!(false);
