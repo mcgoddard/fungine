@@ -24,10 +24,14 @@ pub mod fungine {
     use serde_json;
     use erased_serde;
 
+    // A struct representing a message between GameObjects. 
+    // This will probably change into a trait once in use.
     pub struct Message {
 
     }
 
+    // The GameObject trait will be implemented by everything that wants to be executed
+    // as part of a frame step by the engine.
     pub trait GameObject: Downcast + Send + Sync + erased_serde::Serialize {
         fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject>>>>, messages: Vec<Message>) -> Box<GameObject>;
         fn box_clone(&self) -> Box<GameObject>;
@@ -42,6 +46,7 @@ pub mod fungine {
         }
     }
 
+    // The main engine structure. This stores the state, communications and networking objects.
     pub struct Fungine {
         initial_state: Arc<Vec<Arc<Box<GameObject>>>>,
         sends: Vec<Sender<(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>)>>,
@@ -51,10 +56,13 @@ pub mod fungine {
     }
 
     impl Fungine {
+        // Constructor that sets up the engine with an initial state, worker threads and networking.
         pub fn new(initial_state: Arc<Vec<Arc<Box<GameObject>>>>, port: Option<String>) -> Fungine {
+            // Create channels for sending objects to process to worker threads.
             let (send_modified, receive_modified) = mpsc::channel();
             let receiver = receive_modified;
             let mut sends = vec![];
+            // Set up networking (if a port is passed)
             let socket: Option<UdpSocket> = match port.clone() {
                 Some(_) => {
                     let soc = UdpSocket::bind("127.0.0.1:0");
@@ -65,6 +73,7 @@ pub mod fungine {
                 },
                 None => None
             };
+            // Create worker threads
             let thread_count = num_cpus::get() - 1;
             for _ in 0..thread_count {
                 let send_modified = send_modified.clone();
@@ -72,6 +81,8 @@ pub mod fungine {
                 sends.push(send_original);
 
                 thread::spawn(move || {
+                    // A worker thread will pull GameObjects, execute their update method and send the new
+                    // state back to the main thread.
                     loop {
                         match receive_original.recv() {
                             Ok(original) => {
@@ -83,6 +94,7 @@ pub mod fungine {
                                 send_modified.send(Arc::new(new)).unwrap();
                             },
                             Err(_) => {
+                                // The channel has been closed so exit the worker
                                 println!("Closing worker thread");
                                 break;
                             }
@@ -100,6 +112,7 @@ pub mod fungine {
             }
         }
 
+        // Step the engine forward indefinitely.
         pub fn run(self) {
             let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
@@ -108,6 +121,7 @@ pub mod fungine {
             }
         }
 
+        // Step the engine forward a specified number of steps, used for testing.
         pub fn run_steps(self, steps: u32) -> Arc<Vec<Arc<Box<GameObject>>>> {
             let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
@@ -118,19 +132,23 @@ pub mod fungine {
             states
         }
 
+        // Perform one step by processing each GameObject in the state once.
         fn step_engine(socket: &Option<UdpSocket>, port: Option<String>, states: Arc<Vec<Arc<Box<GameObject>>>>, sends: Vec<Sender<(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>)>>, receiver: &Receiver<Arc<Box<GameObject>>>) -> Arc<Vec<Arc<Box<GameObject>>>> {
+            // Send current states to the worker threads
             for x in 0..states.len() {
                 let states = states.clone();
                 let state = states[x].clone();
                 sends[x % sends.len()].send((state, states)).unwrap();
             }
             let mut next_states: Vec<Arc<Box<GameObject>>> = vec![];
+            // Collect new states
             for _ in 0..states.len() {
                 let state = receiver.recv().unwrap();
+                // Send over networking (if enabled)
                 match *socket {
                     Some(ref s) => {
                         match port.clone() {
-                            Some(p) => {
+                            Some(p) => {l
                                 let mut buf = Vec::new();
                                 {
                                     let buf = &mut buf;
@@ -176,6 +194,7 @@ mod tests {
 
     use serde_json;
 
+    // A GameObject implementation with some state
     #[derive(Clone, Serialize, Deserialize, Debug)]
     struct TestGameObject {
         value: i32,
@@ -186,6 +205,7 @@ mod tests {
             Box::new((*self).clone())
         }
 
+        // The update function simply increments the internal counter
         fn update(&self, _current_state: Arc<Vec<Arc<Box<GameObject>>>>, _messages: Vec<Message>) -> Box<GameObject> {
             Box::new(TestGameObject {
                 value: self.value + 1
@@ -196,6 +216,7 @@ mod tests {
     unsafe impl Sync for TestGameObject {}
 
 
+    // A single object, single iteration test to make sure state is passed around correctly
     #[test]
     fn test_iterate() {
         let initial_object = TestGameObject {
@@ -216,6 +237,7 @@ mod tests {
         }
     }
 
+    // Run 1000 steps on 1000 boids to check state and benchmark speed
     #[test]
     fn speed_test() {
         let mut initial_state = Vec::new();
@@ -243,6 +265,7 @@ mod tests {
         }
     }
 
+    // Test that state can be sent over UDP and correct objects are received
     #[test]
     fn network_test() {
         let initial_object = TestGameObject {
