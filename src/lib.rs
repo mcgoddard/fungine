@@ -65,7 +65,8 @@ pub mod fungine {
                 },
                 None => None
             };
-            for _ in 0..num_cpus::get() {
+            let thread_count = num_cpus::get() - 1;
+            for _ in 0..thread_count {
                 let send_modified = send_modified.clone();
                 let (send_original, receive_original) = mpsc::channel();
                 sends.push(send_original);
