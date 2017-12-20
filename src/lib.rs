@@ -3,7 +3,8 @@ extern crate downcast_rs;
 extern crate stopwatch;
 extern crate num_cpus;
 extern crate serde;
-extern crate serde_json;
+#[macro_use(bson)]
+extern crate bson;
 #[macro_use]
 extern crate erased_serde;
 #[macro_use]
@@ -21,8 +22,11 @@ pub mod fungine {
     use std::ops::Deref;
     use downcast_rs::Downcast;
     use num_cpus;
-    use serde_json;
     use erased_serde;
+    use bson::Encoder;
+    use serde;
+    use serde::Serialize;
+    use bson;
 
     // A struct representing a message between GameObjects. 
     // This will probably change into a trait once in use.
@@ -88,15 +92,21 @@ pub mod fungine {
                                         let mut buf = Vec::new();
                                         {
                                             let buf = &mut buf;
-                                            let writer = BufWriter::new(buf);
-                                            let json = &mut serde_json::ser::Serializer::new(writer);
-                                            let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
-                                            formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
+                                            let writer = &mut BufWriter::new(buf);
+                                            let bson = Encoder::new();
+                                            // let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
+                                            // formats.insert("bson", Box::new(erased_serde::Serializer::erase(bson)));
                                             let mut values: Map<&str, Box<GameObject>> = Map::new();
                                             values.insert("state", state.deref().box_clone());
-                                            let format = formats.get_mut("json").unwrap();
+                                            // let format = formats.get_mut("bson").unwrap();
                                             let value = &values["state"];
-                                            value.erased_serialize(format).unwrap();
+                                            // value.erased_serialize(format).unwrap();
+                                            // if let Ok(result) = value.serialize(bson) {
+                                            //     result
+                                            // }
+                                            if let Ok(_) = bson::encode_document(writer, buf) {
+
+                                            }
                                         }
                                         
                                         let addr: String = format!("127.0.0.1:{}", p);
