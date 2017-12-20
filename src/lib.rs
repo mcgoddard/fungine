@@ -46,10 +46,13 @@ pub mod fungine {
         }
     }
 
+    #[derive(Clone)]
+    pub struct GameObjectWithState(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>);
+
     // The main engine structure. This stores the state, communications and networking objects.
     pub struct Fungine {
         initial_state: Arc<Vec<Arc<Box<GameObject>>>>,
-        sends: Vec<Sender<(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>)>>,
+        sends: Vec<Sender<GameObjectWithState>>,
         receiver: Receiver<Arc<Box<GameObject>>>,
         socket: Option<UdpSocket>,
         port: Option<String>
@@ -86,9 +89,9 @@ pub mod fungine {
                     loop {
                         match receive_original.recv() {
                             Ok(original) => {
-                                let original: (Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>) = original;
-                                let current_object: Arc<Box<GameObject>> = original.clone().0.clone();
-                                let current_state: Arc<Vec<Arc<Box<GameObject>>>> = original.clone().1.clone();
+                                let original: GameObjectWithState = original;
+                                let current_object: Arc<Box<GameObject>> = Arc::clone(&original.0);
+                                let current_state: Arc<Vec<Arc<Box<GameObject>>>> = Arc::clone(&original.1);
                                 let messages: Vec<Message> = Vec::new();
                                 let new = current_object.update(current_state, messages);
                                 send_modified.send(Arc::new(new)).unwrap();
@@ -117,7 +120,7 @@ pub mod fungine {
             let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
             loop {
-                states = Fungine::step_engine(&self.socket, self.port.clone(), states, self.sends.clone(), &self.receiver);
+                states = Fungine::step_engine(&self.socket, &self.port, &states, &self.sends, &self.receiver);
             }
         }
 
@@ -126,55 +129,49 @@ pub mod fungine {
             let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
 
             for _ in 0..steps {
-                states = Fungine::step_engine(&self.socket, self.port.clone(), states, self.sends.clone(), &self.receiver);
+                states = Fungine::step_engine(&self.socket, &self.port, &states, &self.sends, &self.receiver);
             }
 
             states
         }
 
         // Perform one step by processing each GameObject in the state once.
-        fn step_engine(socket: &Option<UdpSocket>, port: Option<String>, states: Arc<Vec<Arc<Box<GameObject>>>>, sends: Vec<Sender<(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>)>>, receiver: &Receiver<Arc<Box<GameObject>>>) -> Arc<Vec<Arc<Box<GameObject>>>> {
+        fn step_engine(socket: &Option<UdpSocket>, port: &Option<String>, states: &Arc<Vec<Arc<Box<GameObject>>>>, sends: &[Sender<GameObjectWithState>], receiver: &Receiver<Arc<Box<GameObject>>>) -> Arc<Vec<Arc<Box<GameObject>>>> {
             // Send current states to the worker threads
             for x in 0..states.len() {
-                let states = states.clone();
-                let state = states[x].clone();
-                sends[x % sends.len()].send((state, states)).unwrap();
+                let states = Arc::clone(states);
+                let state = Arc::clone(&states[x]);
+                sends[x % sends.len()].send(GameObjectWithState(state, states)).unwrap();
             }
             let mut next_states: Vec<Arc<Box<GameObject>>> = vec![];
             // Collect new states
             for _ in 0..states.len() {
                 let state = receiver.recv().unwrap();
                 // Send over networking (if enabled)
-                match *socket {
-                    Some(ref s) => {
-                        match port.clone() {
-                            Some(p) => {l
-                                let mut buf = Vec::new();
-                                {
-                                    let buf = &mut buf;
-                                    let writer = BufWriter::new(buf);
-                                    let json = &mut serde_json::ser::Serializer::new(writer);
-                                    let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
-                                    formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
-                                    let mut values: Map<&str, Box<GameObject>> = Map::new();
-                                    values.insert("state", state.deref().box_clone());
-                                    let format = formats.get_mut("json").unwrap();
-                                    let value = values.get("state").unwrap();
-                                    value.erased_serialize(format).unwrap();
-                                }
-                                
-                                let addr: String = format!("127.0.0.1:{}", p);
-                                let payload = buf.as_slice();
-
-                                match s.send_to(payload, addr) {
-                                    Ok(_) => {},
-                                    Err(e) => println!("Failed to send: {}", e)
-                                }
-                            },
-                            None => { println!("No destination port") }
+                if let Some(ref s) = *socket {
+                    if let Some(p) = port.clone() {
+                        let mut buf = Vec::new();
+                        {
+                            let buf = &mut buf;
+                            let writer = BufWriter::new(buf);
+                            let json = &mut serde_json::ser::Serializer::new(writer);
+                            let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
+                            formats.insert("json", Box::new(erased_serde::Serializer::erase(json)));
+                            let mut values: Map<&str, Box<GameObject>> = Map::new();
+                            values.insert("state", state.deref().box_clone());
+                            let format = formats.get_mut("json").unwrap();
+                            let value = &values["state"];
+                            value.erased_serialize(format).unwrap();
                         }
-                    },
-                    None => { println!("No send socket") }
+                        
+                        let addr: String = format!("127.0.0.1:{}", p);
+                        let payload = buf.as_slice();
+
+                        match s.send_to(payload, addr) {
+                            Ok(_) => {},
+                            Err(e) => println!("Failed to send: {}", e)
+                        }
+                    }
                 }
                 next_states.push(state);
             }
