@@ -66,10 +66,10 @@ pub mod fungine {
             // Set up networking (if a port is passed)
             let socket: Option<UdpSocket> = match port.clone() {
                 Some(_) => {
-                    let soc = UdpSocket::bind("127.0.0.1:0");
+                    let soc = UdpSocket::bind("0.0.0.0:0");
                     match soc {
                         Ok(s) => Some(s),
-                        Err(_) => None
+                        Err(_) => panic!("Couldn't bind send port")
                     }
                 },
                 None => None
@@ -289,6 +289,7 @@ mod tests {
         let initial_object = TestGameObject {
             value: 0
         };
+        let mut buf = [0; 11];
         let port = "4794";
         let soc = UdpSocket::bind(format!("127.0.0.1:{}", port));
         let socket = match soc {
@@ -300,13 +301,13 @@ mod tests {
         let initial_state = Arc::new(vec![initial_object]);
         let engine = Fungine::new(initial_state, Some(String::from_str(port)).unwrap().ok());
         let final_states = engine.run_steps(1);
-        let mut buf = [0; 11];
-        let (amt, _) = match socket.recv_from(&mut buf)
+        let amt = match socket.recv_from(&mut buf)
         {
-            Ok((a, s)) => (a, s),
+            Ok((a, _)) => a,
             Err(_) => panic!("Couldn't receive")
         };
         assert_eq!(11, amt);
+
         let serialized = str::from_utf8(&buf).unwrap();
         let serialized = &serialized[..amt];
         let deserialized: TestGameObject = serde_json::from_str(&serialized).unwrap();
@@ -334,16 +335,19 @@ mod tests {
             let initial_object = Arc::new(initial_object);
             initial_state.push(initial_object);
         }
-        let port = "4794";
+        let port = "4795";
         let soc = UdpSocket::bind(format!("127.0.0.1:{}", port));
         let socket = match soc {
             Ok(s) => s,
             Err(_) => panic!("Couldn't open listen socket")
         };
-        let engine = Fungine::new(Arc::new(initial_state), Some(String::from_str(port)).unwrap().ok());
-        let sw = Stopwatch::start_new();
-        let final_states = engine.run_steps(1000);
-        println!("Time taken: {}ms", sw.elapsed_ms());
+        let final_states;
+        {
+            let engine = Fungine::new(Arc::new(initial_state), Some(String::from_str(port)).unwrap().ok());
+            let sw = Stopwatch::start_new();
+            final_states = engine.run_steps(1000);
+            println!("Time taken: {}ms", sw.elapsed_ms());
+        }
         assert_eq!(1000, final_states.len());
         for x in 0..final_states.len() {
             let final_state = final_states[x].clone();
@@ -356,9 +360,9 @@ mod tests {
             }
         }
         let mut buf = [0; 11];
-        let (amt, _) = match socket.recv_from(&mut buf)
+        let amt = match socket.recv_from(&mut buf)
         {
-            Ok((a, s)) => (a, s),
+            Ok((a, _)) => a,
             Err(_) => panic!("Couldn't receive")
         };
         assert_eq!(11, amt);
