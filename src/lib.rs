@@ -92,7 +92,7 @@ pub mod fungine {
                                         let mut buf = Vec::new();
                                         {
                                             let buf = &mut buf;
-                                            let writer = &mut BufWriter::new(buf);
+                                            // let writer = &mut BufWriter::new(buf);
                                             let bson = Encoder::new();
                                             // let mut formats: Map<&str, Box<erased_serde::Serializer>> = Map::new();
                                             // formats.insert("bson", Box::new(erased_serde::Serializer::erase(bson)));
@@ -100,13 +100,15 @@ pub mod fungine {
                                             values.insert("state", state.deref().box_clone());
                                             // let format = formats.get_mut("bson").unwrap();
                                             let value = &values["state"];
-                                            // value.erased_serialize(format).unwrap();
-                                            // if let Ok(result) = value.serialize(bson) {
-                                            //     result
-                                            // }
-                                            if let Ok(_) = bson::encode_document(writer, buf) {
-
+                                            // value.serialize(bson).unwrap();
+                                            if let Ok(result) = value.serialize(bson) {
+                                                println!("{:?}", result);
                                             }
+
+                                            // if let Ok(b) = bson::encode_document(buf, value) {
+                                            //     println!("{:?}", String::from_utf8(buf.as_slice().to_vec()));
+                                            //     println!("{:?}", b);
+                                            // }
                                         }
                                         
                                         let addr: String = format!("127.0.0.1:{}", p);
@@ -220,7 +222,7 @@ mod tests {
     use std::str::FromStr;
     use fungine::{ Fungine, GameObject, Message };
     use stopwatch::{Stopwatch};
-    use serde_json;
+    // use serde_json;
 
     // A GameObject implementation with some state
     #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -317,8 +319,8 @@ mod tests {
             Err(_) => panic!("Couldn't receive")
         };
         assert_eq!(11, amt);
-        let serialized = str::from_utf8(&buf).unwrap();
-        let serialized = &serialized[..amt];
+        // let serialized = str::from_utf8(&buf).unwrap();
+        // let serialized = &serialized[..amt];
         let deserialized: TestGameObject = serde_json::from_str(&serialized).unwrap();
         assert_eq!(1, final_states.len());
         for x in 0..final_states.len() {
@@ -333,44 +335,44 @@ mod tests {
     }
 
     // Run 1000 steps on 1000 boids to check state and benchmark speed
-    #[test]
-    fn speed_with_networking_test() {
-        let mut initial_state = Vec::new();
-        for _ in 0..1000 {
-            let initial_object = TestGameObject {
-                value: 0
-            };
-            let initial_object = Box::new(initial_object) as Box<GameObject>;
-            let initial_object = Arc::new(initial_object);
-            initial_state.push(initial_object);
-        }
-        let port = "4794";
-        let soc = UdpSocket::bind(format!("127.0.0.1:{}", port));
-        let socket = match soc {
-            Ok(s) => s,
-            Err(_) => panic!("Couldn't open listen socket")
-        };
-        let engine = Fungine::new(Arc::new(initial_state), Some(String::from_str(port)).unwrap().ok());
-        let sw = Stopwatch::start_new();
-        let final_states = engine.run_steps(1000);
-        println!("Time taken: {}ms", sw.elapsed_ms());
-        assert_eq!(1000, final_states.len());
-        for x in 0..final_states.len() {
-            let final_state = final_states[x].clone();
-            let final_state: Box<GameObject> = final_state.box_clone();
-            if let Some(object) = final_state.downcast_ref::<TestGameObject>() {
-                assert_eq!(1000, object.value);
-            }
-            else {
-                assert!(false);
-            }
-        }
-        let mut buf = [0; 11];
-        let (amt, _) = match socket.recv_from(&mut buf)
-        {
-            Ok((a, s)) => (a, s),
-            Err(_) => panic!("Couldn't receive")
-        };
-        assert_eq!(11, amt);
-    }
+    // #[test]
+    // fn speed_with_networking_test() {
+    //     let mut initial_state = Vec::new();
+    //     for _ in 0..1000 {
+    //         let initial_object = TestGameObject {
+    //             value: 0
+    //         };
+    //         let initial_object = Box::new(initial_object) as Box<GameObject>;
+    //         let initial_object = Arc::new(initial_object);
+    //         initial_state.push(initial_object);
+    //     }
+    //     let port = "4794";
+    //     let soc = UdpSocket::bind(format!("127.0.0.1:{}", port));
+    //     let socket = match soc {
+    //         Ok(s) => s,
+    //         Err(_) => panic!("Couldn't open listen socket")
+    //     };
+    //     let engine = Fungine::new(Arc::new(initial_state), Some(String::from_str(port)).unwrap().ok());
+    //     let sw = Stopwatch::start_new();
+    //     let final_states = engine.run_steps(1000);
+    //     println!("Time taken: {}ms", sw.elapsed_ms());
+    //     assert_eq!(1000, final_states.len());
+    //     for x in 0..final_states.len() {
+    //         let final_state = final_states[x].clone();
+    //         let final_state: Box<GameObject> = final_state.box_clone();
+    //         if let Some(object) = final_state.downcast_ref::<TestGameObject>() {
+    //             assert_eq!(1000, object.value);
+    //         }
+    //         else {
+    //             assert!(false);
+    //         }
+    //     }
+    //     let mut buf = [0; 11];
+    //     let (amt, _) = match socket.recv_from(&mut buf)
+    //     {
+    //         Ok((a, s)) => (a, s),
+    //         Err(_) => panic!("Couldn't receive")
+    //     };
+    //     assert_eq!(11, amt);
+    // }
 }
