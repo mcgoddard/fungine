@@ -23,6 +23,7 @@ pub mod fungine {
     use num_cpus;
     use serde_json;
     use erased_serde;
+    use stopwatch::{Stopwatch};
 
     // A struct representing a message between GameObjects. 
     // This will probably change into a trait once in use.
@@ -79,7 +80,14 @@ pub mod fungine {
                 Some(socket) => {
                     let (s_tx, r_tx) = mpsc::channel();
                     thread::spawn(move || {
+                        let mut sw = Stopwatch::start_new();
+                        let mut sent_count = 0;
                         loop {
+                            if sw.elapsed_ms() > 10000 {
+                                println!("Sent {} states a second", sent_count / 10);
+                                sent_count = 0;
+                                sw.restart();
+                            }
                             match r_tx.recv() {
                                 Ok(state) => {
                                     let state: Arc<Box<GameObject>> = state;
@@ -114,6 +122,7 @@ pub mod fungine {
                                     break;
                                 }
                             }
+                            sent_count += 1;
                         }
                     });
                     Some(s_tx)
