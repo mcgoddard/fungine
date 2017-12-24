@@ -84,7 +84,7 @@ pub mod fungine {
                         let mut sent_count = 0;
                         loop {
                             if sw.elapsed_ms() > 10000 {
-                                println!("Sent {} states a second", sent_count / 10);
+                                println!("State sends per second: {}", sent_count / 10);
                                 sent_count = 0;
                                 sw.restart();
                             }
@@ -175,9 +175,17 @@ pub mod fungine {
         // Step the engine forward indefinitely.
         pub fn run(self) {
             let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
+            let mut sw = Stopwatch::start_new();
+            let mut frame_count = 0;
 
             loop {
+                if sw.elapsed_ms() > 10000 {
+                    println!("Frames processed per second: {}", frame_count / 10);
+                    sw.restart();
+                    frame_count = 0;
+                }
                 states = Fungine::step_engine(&states, &self.sends, &self.receiver);
+                frame_count += 1;
             }
         }
 
