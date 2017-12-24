@@ -179,6 +179,7 @@ pub mod fungine {
             let mut frame_count = 0;
 
             loop {
+                println!("Processed a frame");
                 if sw.elapsed_ms() > 10000 {
                     println!("Frames processed per second: {}", frame_count / 10);
                     sw.restart();
