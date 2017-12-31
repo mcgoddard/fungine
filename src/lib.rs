@@ -6,6 +6,7 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate erased_serde;
+#[allow(unused_imports)]
 #[macro_use]
 extern crate serde_derive;
 
@@ -54,7 +55,8 @@ pub mod fungine {
     pub struct Fungine {
         initial_state: Arc<Vec<Arc<Box<GameObject>>>>,
         sends: Vec<Sender<GameObjectWithState>>,
-        receiver: Receiver<Arc<Box<GameObject>>>
+        receiver: Receiver<Arc<Box<GameObject>>>,
+        current_state: Arc<Vec<Arc<Box<GameObject>>>>
     }
 
     impl Fungine {
@@ -166,15 +168,16 @@ pub mod fungine {
             }
 
             Fungine {
-                initial_state: initial_state,
+                initial_state: initial_state.clone(),
                 sends: sends,
-                receiver: receiver
+                receiver: receiver,
+                current_state: initial_state.clone()
             }
         }
 
         // Step the engine forward indefinitely.
-        pub fn run(self) {
-            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
+        pub fn run(&self) {
+            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state.clone();
             let mut sw = Stopwatch::start_new();
             let mut frame_count = 0;
 
@@ -190,12 +193,25 @@ pub mod fungine {
         }
 
         // Step the engine forward a specified number of steps, used for testing.
-        pub fn run_steps(self, steps: u32) -> Arc<Vec<Arc<Box<GameObject>>>> {
-            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state;
+        pub fn run_steps(&self, steps: u32) -> Arc<Vec<Arc<Box<GameObject>>>> {
+            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state.clone();
 
             for _ in 0..steps {
                 states = Fungine::step_engine(&states, &self.sends, &self.receiver);
             }
+
+            states
+        }
+
+        // Step the engine forward a specified number of steps from a provided state.
+        pub fn run_steps_cont(&mut self, steps: u32) -> Arc<Vec<Arc<Box<GameObject>>>> {
+            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.current_state.clone();
+
+            for _ in 0..steps {
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver);
+            }
+
+            self.current_state = states.clone();
 
             states
         }
