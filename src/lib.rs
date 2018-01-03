@@ -53,10 +53,10 @@ pub mod fungine {
 
     // The main engine structure. This stores the state, communications and networking objects.
     pub struct Fungine {
-        initial_state: Arc<Vec<Arc<Box<GameObject>>>>,
+        pub initial_state: Arc<Vec<Arc<Box<GameObject>>>>,
         sends: Vec<Sender<GameObjectWithState>>,
         receiver: Receiver<Arc<Box<GameObject>>>,
-        current_state: Arc<Vec<Arc<Box<GameObject>>>>
+        pub current_state: Arc<Vec<Arc<Box<GameObject>>>>
     }
 
     impl Fungine {
