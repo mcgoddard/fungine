@@ -132,7 +132,10 @@ pub mod fungine {
                 None => None
             };
             // Create worker threads
-            let thread_count = num_cpus::get() - 2;
+            let mut thread_count = num_cpus::get() - 2;
+            if thread_count <= 2 {
+                thread_count = 1;
+            }
             for _ in 0..thread_count {
                 let send_modified = send_modified.clone();
                 let s_tx = send_tx.clone();
