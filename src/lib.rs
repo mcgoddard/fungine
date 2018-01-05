@@ -6,9 +6,6 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate erased_serde;
-#[allow(unused_imports)]
-#[macro_use]
-extern crate serde_derive;
 
 pub mod fungine {
     use std::thread;
@@ -35,7 +32,7 @@ pub mod fungine {
     // The GameObject trait will be implemented by everything that wants to be executed
     // as part of a frame step by the engine.
     pub trait GameObject: Downcast + Send + Sync + erased_serde::Serialize {
-        fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject>>>>, messages: Vec<Message>) -> Box<GameObject>;
+        fn update(&self, current_state: Arc<Vec<Arc<Box<GameObject>>>>, messages: Vec<Message>, time: f32) -> Box<GameObject>;
         fn box_clone(&self) -> Box<GameObject>;
     }
     impl_downcast!(GameObject);
@@ -49,7 +46,7 @@ pub mod fungine {
     }
 
     #[derive(Clone)]
-    pub struct GameObjectWithState(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>);
+    pub struct GameObjectWithState(Arc<Box<GameObject>>, Arc<Vec<Arc<Box<GameObject>>>>, f32);
 
     // The main engine structure. This stores the state, communications and networking objects.
     pub struct Fungine {
@@ -61,7 +58,8 @@ pub mod fungine {
 
     impl Fungine {
         // Constructor that sets up the engine with an initial state, worker threads and networking.
-        pub fn new(initial_state: Arc<Vec<Arc<Box<GameObject>>>>, port: Option<String>) -> Fungine {
+        #[allow(match_wild_err_arm)]
+        pub fn new(initial_state: &Arc<Vec<Arc<Box<GameObject>>>>, port: Option<String>) -> Fungine {
             // Create channels for sending objects to process to worker threads.
             let (send_modified, receive_modified) = mpsc::channel();
             let receiver = receive_modified;
@@ -85,7 +83,7 @@ pub mod fungine {
                         let mut sw = Stopwatch::start_new();
                         let mut sent_count = 0;
                         loop {
-                            if sw.elapsed_ms() > 10000 {
+                            if sw.elapsed_ms() > 10_000 {
                                 println!("State sends per second: {}", sent_count / 10);
                                 sent_count = 0;
                                 sw.restart();
@@ -132,9 +130,12 @@ pub mod fungine {
                 None => None
             };
             // Create worker threads
-            let mut thread_count = num_cpus::get() - 2;
+            let mut thread_count = num_cpus::get();
             if thread_count <= 2 {
                 thread_count = 1;
+            }
+            else {
+                thread_count -= 2;
             }
             for _ in 0..thread_count {
                 let send_modified = send_modified.clone();
@@ -153,7 +154,7 @@ pub mod fungine {
                                 let current_object: Arc<Box<GameObject>> = Arc::clone(&original.0);
                                 let current_state: Arc<Vec<Arc<Box<GameObject>>>> = Arc::clone(&original.1);
                                 let messages: Vec<Message> = Vec::new();
-                                let new = current_object.update(current_state, messages);
+                                let new = current_object.update(current_state, messages, original.2);
                                 let new_ref = Arc::new(new);
                                 send_modified.send(Arc::clone(&new_ref)).unwrap();
                                 if let Some(tx) = s_tx {
@@ -171,61 +172,62 @@ pub mod fungine {
             }
 
             Fungine {
-                initial_state: initial_state.clone(),
+                initial_state: Arc::clone(initial_state),
                 sends: sends,
                 receiver: receiver,
-                current_state: initial_state.clone()
+                current_state: Arc::clone(initial_state)
             }
         }
 
         // Step the engine forward indefinitely.
         pub fn run(&self) {
-            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state.clone();
+            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = Arc::clone(&self.initial_state);
             let mut sw = Stopwatch::start_new();
             let mut frame_count = 0;
 
             loop {
-                if sw.elapsed_ms() > 10000 {
+                if sw.elapsed_ms() > 10_000 {
                     println!("Frames processed per second: {}", frame_count / 10);
                     sw.restart();
                     frame_count = 0;
                 }
-                states = Fungine::step_engine(&states, &self.sends, &self.receiver);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver, (sw.elapsed_ms()/1000) as f32);
                 frame_count += 1;
+                sw.restart();
             }
         }
 
         // Step the engine forward a specified number of steps, used for testing.
-        pub fn run_steps(&self, steps: u32) -> Arc<Vec<Arc<Box<GameObject>>>> {
-            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.initial_state.clone();
+        pub fn run_steps(&self, steps: u32, time_between: f32) -> Arc<Vec<Arc<Box<GameObject>>>> {
+            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = Arc::clone(&self.initial_state);
 
             for _ in 0..steps {
-                states = Fungine::step_engine(&states, &self.sends, &self.receiver);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between);
             }
 
             states
         }
 
         // Step the engine forward a specified number of steps from a provided state.
-        pub fn run_steps_cont(&mut self, steps: u32) -> Arc<Vec<Arc<Box<GameObject>>>> {
-            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = self.current_state.clone();
+        pub fn run_steps_cont(&mut self, steps: u32, time_between: f32) -> Arc<Vec<Arc<Box<GameObject>>>> {
+            let mut states: Arc<Vec<Arc<Box<GameObject>>>> = Arc::clone(&self.current_state);
 
             for _ in 0..steps {
-                states = Fungine::step_engine(&states, &self.sends, &self.receiver);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between);
             }
 
-            self.current_state = states.clone();
+            self.current_state = Arc::clone(&states);
 
             states
         }
 
         // Perform one step by processing each GameObject in the state once.
-        fn step_engine(states: &Arc<Vec<Arc<Box<GameObject>>>>, sends: &[Sender<GameObjectWithState>], receiver: &Receiver<Arc<Box<GameObject>>>) -> Arc<Vec<Arc<Box<GameObject>>>> {
+        fn step_engine(states: &Arc<Vec<Arc<Box<GameObject>>>>, sends: &[Sender<GameObjectWithState>], receiver: &Receiver<Arc<Box<GameObject>>>, time: f32) -> Arc<Vec<Arc<Box<GameObject>>>> {
             // Send current states to the worker threads
             for x in 0..states.len() {
                 let states = Arc::clone(states);
                 let state = Arc::clone(&states[x]);
-                sends[x % sends.len()].send(GameObjectWithState(state, states)).unwrap();
+                sends[x % sends.len()].send(GameObjectWithState(state, states, time)).unwrap();
             }
             let mut next_states: Vec<Arc<Box<GameObject>>> = vec![];
             // Collect new states
