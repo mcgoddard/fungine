@@ -9,6 +9,7 @@ pub mod fungine {
     use std::sync::mpsc::Sender;
     use std::sync::mpsc::Receiver;
     use std::sync::mpsc;
+    use std::collections::HashMap;
     use downcast_rs::Downcast;
     use num_cpus;
     use stopwatch::{Stopwatch};
@@ -47,7 +48,8 @@ pub mod fungine {
         pub initial_state: Arc<Vec<GameObjectWithID>>,
         sends: Vec<Sender<GameObjectWithState>>,
         receiver: Receiver<GameObjectWithID>,
-        pub current_state: Arc<Vec<GameObjectWithID>>
+        pub current_state: Arc<Vec<GameObjectWithID>>,
+        messages: HashMap<u64, Vec<Box<Message>>>
     }
 
     impl Fungine {
@@ -101,7 +103,8 @@ pub mod fungine {
                 initial_state: Arc::clone(initial_state),
                 sends: sends,
                 receiver: receiver,
-                current_state: Arc::clone(initial_state)
+                current_state: Arc::clone(initial_state),
+                messages: HashMap::new()
             }
         }
 
