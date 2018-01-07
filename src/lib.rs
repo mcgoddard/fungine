@@ -9,7 +9,7 @@ pub mod fungine {
     use std::sync::mpsc::Sender;
     use std::sync::mpsc::Receiver;
     use std::sync::mpsc;
-    use std::collections::HashMap;
+    use std::collections::hash_map::{HashMap, Entry};
     use downcast_rs::Downcast;
     use num_cpus;
     use stopwatch::{Stopwatch};
@@ -52,9 +52,15 @@ pub mod fungine {
     }
 
     #[derive(Clone)]
+    pub struct MessageWithID {
+        pub id: u64,
+        pub message: Arc<Box<Message>>
+    }
+
+    #[derive(Clone)]
     pub struct UpdateResult {
         state: Box<GameObject>,
-        messages: Vec<Box<Message>>
+        messages: Vec<Box<MessageWithID>>
     }
 
     #[derive(Clone)]
@@ -173,13 +179,14 @@ pub mod fungine {
         fn step_engine(states: &Arc<Vec<GameObjectWithID>>, sends: &[Sender<GameObjectWithState>], 
             receiver: &Receiver<UpdateResultWithID>, time: f32, messages: &HashMap<u64, Arc<Vec<Box<Message>>>>) -> Arc<Vec<GameObjectWithID>> {
             // Send current states to the worker threads
-            for x in 0..states.len() {
+            for i in 0..states.len() {
                 let states = Arc::clone(states);
-                let state = states[x].clone();
-                let messages = messages[&state.id].clone();
-                sends[x % sends.len()].send(GameObjectWithState(state, states, time, messages)).unwrap();
+                let state = states[i].clone();
+                let messages = Arc::clone(&messages[&state.id]);
+                sends[i % sends.len()].send(GameObjectWithState(state, states, time, messages)).unwrap();
             }
             let mut next_states: Vec<GameObjectWithID> = vec![];
+            let mut next_messages: HashMap<u64, Arc<Vec<Arc<Box<Message>>>>> = HashMap::new();
             // Collect new states
             for _ in 0..states.len() {
                 let result = receiver.recv().unwrap();
@@ -187,6 +194,21 @@ pub mod fungine {
                     id: result.id,
                     game_object: Arc::new(result.result.state)
                 });
+                let messages = result.result.messages;
+                for message in &messages {
+                    let message = message.clone();
+                    match next_messages.entry(result.id) {
+                        Entry::Occupied(mut entry) => {
+                            let entry = entry.get_mut();
+                            if let Some(m) = Arc::get_mut(entry) {
+                                m.push(Arc::clone(&message.message));
+                            }
+                        },
+                        Entry::Vacant(entry) => {
+                            entry.insert(Arc::new(vec![message.message]));
+                        },
+                    }
+                }
             }
             Arc::new(next_states)
         }
