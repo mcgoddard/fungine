@@ -15,14 +15,22 @@ pub mod fungine {
     use stopwatch::{Stopwatch};
 
     // A trait representing a message between GameObjects.
-    pub trait Message: Downcast {
+    pub trait Message: Downcast + Send + Sync {
+        fn box_clone(&self) -> Box<Message>;
     }
     impl_downcast!(Message);
+
+    impl Clone for Box<Message>
+    {
+        fn clone(&self) -> Box<Message> {
+            self.box_clone()
+        }
+    }
 
     // The GameObject trait will be implemented by everything that wants to be executed
     // as part of a frame step by the engine.
     pub trait GameObject: Downcast + Send + Sync {
-        fn update(&self, current_state: Arc<Vec<GameObjectWithID>>, messages: Vec<Box<Message>>, time: f32) -> Box<GameObject>;
+        fn update(&self, current_state: Arc<Vec<GameObjectWithID>>, messages: Arc<Vec<Box<Message>>>, time: f32) -> UpdateResult;
         fn box_clone(&self) -> Box<GameObject>;
     }
     impl_downcast!(GameObject);
@@ -35,7 +43,7 @@ pub mod fungine {
     }
 
     #[derive(Clone)]
-    pub struct GameObjectWithState(GameObjectWithID, Arc<Vec<GameObjectWithID>>, f32);
+    pub struct GameObjectWithState(GameObjectWithID, Arc<Vec<GameObjectWithID>>, f32, Arc<Vec<Box<Message>>>);
 
     #[derive(Clone)]
     pub struct GameObjectWithID {
@@ -43,20 +51,32 @@ pub mod fungine {
         pub game_object: Arc<Box<GameObject>>
     }
 
+    #[derive(Clone)]
+    pub struct UpdateResult {
+        state: Box<GameObject>,
+        messages: Vec<Box<Message>>
+    }
+
+    #[derive(Clone)]
+    pub struct UpdateResultWithID {
+        pub id: u64,
+        pub result: UpdateResult
+    }
+
     // The main engine structure. This stores the state, communications and networking objects.
     pub struct Fungine {
         pub initial_state: Arc<Vec<GameObjectWithID>>,
         sends: Vec<Sender<GameObjectWithState>>,
-        receiver: Receiver<GameObjectWithID>,
+        receiver: Receiver<UpdateResultWithID>,
         pub current_state: Arc<Vec<GameObjectWithID>>,
-        messages: HashMap<u64, Vec<Box<Message>>>
+        messages: HashMap<u64, Arc<Vec<Box<Message>>>>
     }
 
     impl Fungine {
         // Constructor that sets up the engine with an initial state, worker threads and networking.
         pub fn new(initial_state: &Arc<Vec<GameObjectWithID>>) -> Fungine {
             // Create channels for sending objects to process to worker threads.
-            let (send_modified, receive_modified): (Sender<GameObjectWithID>, Receiver<GameObjectWithID>) = mpsc::channel();
+            let (send_modified, receive_modified): (Sender<UpdateResultWithID>, Receiver<UpdateResultWithID>) = mpsc::channel();
             let receiver = receive_modified;
             let mut sends = vec![];
             // Create worker threads
@@ -81,12 +101,11 @@ pub mod fungine {
                                 let original: GameObjectWithState = original;
                                 let current_object: Arc<Box<GameObject>> = Arc::clone(&(original.0).game_object);
                                 let current_state: Arc<Vec<GameObjectWithID>> = Arc::clone(&original.1);
-                                let messages: Vec<Box<Message>> = Vec::new();
+                                let messages: Arc<Vec<Box<Message>>> = Arc::new(Vec::new());
                                 let new = current_object.update(current_state, messages, original.2);
-                                let new_ref = Arc::new(new);
-                                send_modified.send(GameObjectWithID {
-                                    id: (original.0).id, 
-                                    game_object: Arc::clone(&new_ref)
+                                send_modified.send(UpdateResultWithID {
+                                    id: (original.0).id,
+                                    result: new
                                 }).unwrap();
                             },
                             Err(_) => {
@@ -120,7 +139,7 @@ pub mod fungine {
                     sw.restart();
                     frame_count = 0;
                 }
-                states = Fungine::step_engine(&states, &self.sends, &self.receiver, (sw.elapsed_ms()/1000) as f32);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver, (sw.elapsed_ms()/1000) as f32, &self.messages);
                 frame_count += 1;
                 sw.restart();
             }
@@ -131,7 +150,7 @@ pub mod fungine {
             let mut states: Arc<Vec<GameObjectWithID>> = Arc::clone(&self.initial_state);
 
             for _ in 0..steps {
-                states = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between, &self.messages);
             }
 
             states
@@ -142,7 +161,7 @@ pub mod fungine {
             let mut states: Arc<Vec<GameObjectWithID>> = Arc::clone(&self.current_state);
 
             for _ in 0..steps {
-                states = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between);
+                states = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between, &self.messages);
             }
 
             self.current_state = Arc::clone(&states);
@@ -151,18 +170,23 @@ pub mod fungine {
         }
 
         // Perform one step by processing each GameObject in the state once.
-        fn step_engine(states: &Arc<Vec<GameObjectWithID>>, sends: &[Sender<GameObjectWithState>], receiver: &Receiver<GameObjectWithID>, time: f32) -> Arc<Vec<GameObjectWithID>> {
+        fn step_engine(states: &Arc<Vec<GameObjectWithID>>, sends: &[Sender<GameObjectWithState>], 
+            receiver: &Receiver<UpdateResultWithID>, time: f32, messages: &HashMap<u64, Arc<Vec<Box<Message>>>>) -> Arc<Vec<GameObjectWithID>> {
             // Send current states to the worker threads
             for x in 0..states.len() {
                 let states = Arc::clone(states);
                 let state = states[x].clone();
-                sends[x % sends.len()].send(GameObjectWithState(state, states, time)).unwrap();
+                let messages = messages[&state.id].clone();
+                sends[x % sends.len()].send(GameObjectWithState(state, states, time, messages)).unwrap();
             }
             let mut next_states: Vec<GameObjectWithID> = vec![];
             // Collect new states
             for _ in 0..states.len() {
-                let state = receiver.recv().unwrap();
-                next_states.push(state);
+                let result = receiver.recv().unwrap();
+                next_states.push(GameObjectWithID {
+                    id: result.id,
+                    game_object: Arc::new(result.result.state)
+                });
             }
             Arc::new(next_states)
         }
