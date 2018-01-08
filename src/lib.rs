@@ -30,7 +30,7 @@ pub mod fungine {
     // The GameObject trait will be implemented by everything that wants to be executed
     // as part of a frame step by the engine.
     pub trait GameObject: Downcast + Send + Sync {
-        fn update(&self, current_state: Arc<Vec<GameObjectWithID>>, messages: Arc<Vec<Arc<Box<Message>>>>, time: f32) -> UpdateResult;
+        fn update(&self, id: u64, current_state: Arc<Vec<GameObjectWithID>>, messages: Arc<Vec<Arc<Box<Message>>>>, time: f32) -> UpdateResult;
         fn box_clone(&self) -> Box<GameObject>;
     }
     impl_downcast!(GameObject);
@@ -108,7 +108,7 @@ pub mod fungine {
                                 let current_object: Arc<Box<GameObject>> = Arc::clone(&(original.0).game_object);
                                 let current_state: Arc<Vec<GameObjectWithID>> = Arc::clone(&original.1);
                                 let messages: Arc<Vec<Arc<Box<Message>>>> = original.3;
-                                let new = current_object.update(current_state, messages, original.2);
+                                let new = current_object.update((original.0).id, current_state, messages, original.2);
                                 send_modified.send(UpdateResultWithID {
                                     id: (original.0).id,
                                     result: new
@@ -250,7 +250,7 @@ mod tests {
         }
 
         // The update function simply increments the internal counter
-        fn update(&self, _current_state: Arc<Vec<GameObjectWithID>>, _messages: Arc<Vec<Arc<Box<Message>>>>, _frame_time: f32) -> UpdateResult {
+        fn update(&self, _id: u64, _current_state: Arc<Vec<GameObjectWithID>>, _messages: Arc<Vec<Arc<Box<Message>>>>, _frame_time: f32) -> UpdateResult {
             UpdateResult {
                 state: Box::new(TestGameObject {
                     value: self.value + 1
@@ -287,7 +287,7 @@ mod tests {
         }
 
         // The update function simply increments the internal counter
-        fn update(&self, current_state: Arc<Vec<GameObjectWithID>>, messages: Arc<Vec<Arc<Box<Message>>>>, _frame_time: f32) -> UpdateResult {
+        fn update(&self, id: u64, current_state: Arc<Vec<GameObjectWithID>>, messages: Arc<Vec<Arc<Box<Message>>>>, _frame_time: f32) -> UpdateResult {
             let mut new_value: i32 = self.value;
             for message in messages.clone().iter() {
                 let message: Box<Message> = message.box_clone();
@@ -297,12 +297,14 @@ mod tests {
             }
             let mut new_messages = vec![];
             for state in current_state.iter() {
-                new_messages.push(Arc::new(Box::new(MessageWithID {
-                    id: state.id,
-                    message: Arc::new(Box::new(TestMessage {
-                        value: 1
-                    }))
-                })));
+                if state.id != id {
+                    new_messages.push(Arc::new(Box::new(MessageWithID {
+                        id: state.id,
+                        message: Arc::new(Box::new(TestMessage {
+                            value: 1
+                        }))
+                    })));
+                }
             }
             UpdateResult {
                 state: Box::new(MessageGameObject {
@@ -377,7 +379,7 @@ mod tests {
     #[test]
     fn message_test() {
         let mut initial_state = vec![];
-        for i in 0u64..2u64 {
+        for i in 0u64..3u64 {
             let initial_object = MessageGameObject {
                 value: 0
             };
@@ -392,7 +394,7 @@ mod tests {
         let initial_state = Arc::new(initial_state);
         let engine = Fungine::new(&initial_state);
         let next_states = engine.run_steps(2, 1f32);
-        for i in 0..2 {
+        for i in 0..3 {
             let next_state = next_states[i].clone();
             let next_state: Box<GameObject> = (next_state.game_object).box_clone();
             if let Some(next_object) = next_state.downcast_ref::<MessageGameObject>() {
