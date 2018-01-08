@@ -30,7 +30,8 @@ pub mod fungine {
     // The GameObject trait will be implemented by everything that wants to be executed
     // as part of a frame step by the engine.
     pub trait GameObject: Downcast + Send + Sync {
-        fn update(&self, id: u64, current_state: Arc<Vec<GameObjectWithID>>, messages: Arc<Vec<Arc<Box<Message>>>>, time: f32) -> UpdateResult;
+        fn update(&self, id: u64, current_state: Arc<Vec<GameObjectWithID>>, 
+            messages: Arc<Vec<Arc<Box<Message>>>>, time: f32) -> UpdateResult;
         fn box_clone(&self) -> Box<GameObject>;
     }
     impl_downcast!(GameObject);
@@ -195,7 +196,7 @@ pub mod fungine {
                 let state = states[i].clone();
                 let message: Arc<Vec<Arc<Box<Message>>>>;
                 if let Some(m) = messages.get(&state.id) {
-                    message = m.clone();
+                    message = Arc::clone(m);
                 }
                 else {
                     message = Arc::new(vec![]);
@@ -213,16 +214,16 @@ pub mod fungine {
                 });
                 let messages = result.result.messages;
                 for message in &messages {
-                    let message = message.clone();
+                    let message = Arc::clone(message);
                     match next_messages.entry(result.id) {
                         Entry::Occupied(mut entry) => {
                             let entry = entry.get_mut();
                             if let Some(m) = Arc::get_mut(entry) {
-                                m.push(message.message.clone());
+                                m.push(Arc::clone(&message.message));
                             }
                         },
                         Entry::Vacant(entry) => {
-                            entry.insert(Arc::new(vec![message.message.clone()]));
+                            entry.insert(Arc::new(vec![Arc::clone(&message.message)]));
                         }
                     }
                 }
