@@ -31,7 +31,7 @@ pub mod fungine {
     // as part of a frame step by the engine.
     pub trait GameObject: Downcast + Send + Sync {
         fn update(&self, id: u64, current_state: Arc<Vec<GameObjectWithID>>, 
-            messages: Arc<Vec<Arc<Box<Message>>>>, time: f32) -> UpdateResult;
+            messages: Arc<MessageList>, time: f32) -> UpdateResult;
         fn box_clone(&self) -> Box<GameObject>;
     }
     impl_downcast!(GameObject);
@@ -44,7 +44,7 @@ pub mod fungine {
     }
 
     #[derive(Clone)]
-    pub struct GameObjectWithState(GameObjectWithID, Arc<Vec<GameObjectWithID>>, f32, Arc<Vec<Arc<Box<Message>>>>);
+    pub struct GameObjectWithState(GameObjectWithID, Arc<Vec<GameObjectWithID>>, f32, Arc<MessageList>);
 
     #[derive(Clone)]
     pub struct GameObjectWithID {
@@ -70,20 +70,25 @@ pub mod fungine {
         pub result: UpdateResult
     }
 
-    // The main engine structure. This stores the state, communications and networking objects.
+    type MessageList = Vec<Arc<Box<Message>>>;
+    type MessageSet = HashMap<u64, Arc<MessageList>>;
+
+    // The main engine structure. This stores the state and communications objects.
     pub struct Fungine {
         pub initial_state: Arc<Vec<GameObjectWithID>>,
         sends: Vec<Sender<GameObjectWithState>>,
         receiver: Receiver<UpdateResultWithID>,
         pub current_state: Arc<Vec<GameObjectWithID>>,
-        pub messages: Arc<HashMap<u64, Arc<Vec<Arc<Box<Message>>>>>>
+        pub messages: Arc<MessageSet>
     }
 
     impl Fungine {
-        // Constructor that sets up the engine with an initial state, worker threads and networking.
+        // Constructor that sets up the engine with an initial state and worker 
+        // threads.
         pub fn new(initial_state: &Arc<Vec<GameObjectWithID>>) -> Fungine {
             // Create channels for sending objects to process to worker threads.
-            let (send_modified, receive_modified): (Sender<UpdateResultWithID>, Receiver<UpdateResultWithID>) = mpsc::channel();
+            let (send_modified, receive_modified): (Sender<UpdateResultWithID>, 
+                Receiver<UpdateResultWithID>) = mpsc::channel();
             let receiver = receive_modified;
             let mut sends = vec![];
             // Create worker threads
@@ -100,16 +105,19 @@ pub mod fungine {
                 sends.push(send_original);
 
                 thread::spawn(move || {
-                    // A worker thread will pull GameObjects, execute their update method and send the new
-                    // state back to the main thread.
+                    // A worker thread will pull GameObjects, execute their update 
+                    // method and send the new state back to the main thread.
                     loop {
                         match receive_original.recv() {
                             Ok(original) => {
                                 let original: GameObjectWithState = original;
-                                let current_object: Arc<Box<GameObject>> = Arc::clone(&(original.0).game_object);
-                                let current_state: Arc<Vec<GameObjectWithID>> = Arc::clone(&original.1);
-                                let messages: Arc<Vec<Arc<Box<Message>>>> = original.3;
-                                let new = current_object.update((original.0).id, current_state, messages, original.2);
+                                let current_object: Arc<Box<GameObject>> = 
+                                    Arc::clone(&(original.0).game_object);
+                                let current_state: Arc<Vec<GameObjectWithID>> = 
+                                    Arc::clone(&original.1);
+                                let messages: Arc<MessageList> = original.3;
+                                let new = current_object.update((original.0).id, 
+                                    current_state, messages, original.2);
                                 send_modified.send(UpdateResultWithID {
                                     id: (original.0).id,
                                     result: new
@@ -147,7 +155,8 @@ pub mod fungine {
                     sw.restart();
                     frame_count = 0;
                 }
-                let result = Fungine::step_engine(&states, &self.sends, &self.receiver, (sw.elapsed_ms()/1000) as f32, &messages);
+                let result = Fungine::step_engine(&states, &self.sends, &self.receiver, 
+                    (sw.elapsed_ms()/1000) as f32, &messages);
                 states = result.0;
                 messages = result.1;
                 frame_count += 1;
@@ -161,7 +170,8 @@ pub mod fungine {
             let mut messages = Arc::clone(&self.messages);
 
             for _ in 0..steps {
-                let result = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between, &messages);
+                let result = Fungine::step_engine(&states, &self.sends, &self.receiver, 
+                    time_between, &messages);
                 states = Arc::clone(&result.0);
                 messages = Arc::clone(&result.1);
             }
@@ -175,7 +185,8 @@ pub mod fungine {
             let mut messages = Arc::clone(&self.messages);
 
             for _ in 0..steps {
-                let result = Fungine::step_engine(&states, &self.sends, &self.receiver, time_between, &messages);
+                let result = Fungine::step_engine(&states, &self.sends, &self.receiver, 
+                    time_between, &messages);
                 states = Arc::clone(&result.0);
                 messages = result.1;
             }
@@ -188,13 +199,13 @@ pub mod fungine {
 
         // Perform one step by processing each GameObject in the state once.
         fn step_engine(states: &Arc<Vec<GameObjectWithID>>, sends: &[Sender<GameObjectWithState>], 
-            receiver: &Receiver<UpdateResultWithID>, time: f32, messages: &Arc<HashMap<u64, Arc<Vec<Arc<Box<Message>>>>>>)
-            -> (Arc<Vec<GameObjectWithID>>, Arc<HashMap<u64, Arc<Vec<Arc<Box<Message>>>>>>) {
+            receiver: &Receiver<UpdateResultWithID>, time: f32, messages: &Arc<MessageSet>)
+            -> (Arc<Vec<GameObjectWithID>>, Arc<MessageSet>) {
             // Send current states to the worker threads
             for i in 0..states.len() {
                 let states = Arc::clone(states);
                 let state = states[i].clone();
-                let message: Arc<Vec<Arc<Box<Message>>>>;
+                let message: Arc<MessageList>;
                 if let Some(m) = messages.get(&state.id) {
                     message = Arc::clone(m);
                 }
@@ -204,7 +215,7 @@ pub mod fungine {
                 sends[i % sends.len()].send(GameObjectWithState(state, states, time, message)).unwrap();
             }
             let mut next_states: Vec<GameObjectWithID> = vec![];
-            let mut next_messages: HashMap<u64, Arc<Vec<Arc<Box<Message>>>>> = HashMap::new();
+            let mut next_messages: MessageSet = HashMap::new();
             // Collect new states
             for _ in 0..states.len() {
                 let result = receiver.recv().unwrap();
@@ -251,7 +262,8 @@ mod tests {
         }
 
         // The update function simply increments the internal counter
-        fn update(&self, _id: u64, _current_state: Arc<Vec<GameObjectWithID>>, _messages: Arc<Vec<Arc<Box<Message>>>>, _frame_time: f32) -> UpdateResult {
+        fn update(&self, _id: u64, _current_state: Arc<Vec<GameObjectWithID>>, 
+            _messages: Arc<MessageList>, _frame_time: f32) -> UpdateResult {
             UpdateResult {
                 state: Box::new(TestGameObject {
                     value: self.value + 1
@@ -288,7 +300,8 @@ mod tests {
         }
 
         // The update function simply increments the internal counter
-        fn update(&self, id: u64, current_state: Arc<Vec<GameObjectWithID>>, messages: Arc<Vec<Arc<Box<Message>>>>, _frame_time: f32) -> UpdateResult {
+        fn update(&self, id: u64, current_state: Arc<Vec<GameObjectWithID>>, 
+            messages: Arc<MessageList>, _frame_time: f32) -> UpdateResult {
             let mut new_value: i32 = self.value;
             for message in messages.clone().iter() {
                 let message: Box<Message> = message.box_clone();
