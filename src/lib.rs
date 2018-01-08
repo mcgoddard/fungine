@@ -70,8 +70,8 @@ pub mod fungine {
         pub result: UpdateResult
     }
 
-    type MessageList = Vec<Arc<Box<Message>>>;
-    type MessageSet = HashMap<u64, Arc<MessageList>>;
+    pub type MessageList = Vec<Arc<Box<Message>>>;
+    pub type MessageSet = HashMap<u64, Arc<MessageList>>;
 
     // The main engine structure. This stores the state and communications objects.
     pub struct Fungine {
@@ -247,7 +247,8 @@ pub mod fungine {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use fungine::{ Fungine, GameObject, Message, GameObjectWithID, UpdateResult, MessageWithID };
+    use fungine::{ Fungine, GameObject, Message, GameObjectWithID, UpdateResult, 
+        MessageWithID, MessageList };
     use stopwatch::{ Stopwatch };
 
     // A GameObject implementation with some state
