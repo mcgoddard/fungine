@@ -197,6 +197,24 @@ pub mod fungine {
             states
         }
 
+        // Push an external message into the current message set.
+        pub fn push_message(&mut self, message_pair: MessageWithID) {
+            let messages = Arc::get_mut(&mut self.messages);
+            if let Some(m) = messages {
+                match m.entry(message_pair.id) {
+                    Entry::Occupied(mut entry) => {
+                        let entry = entry.get_mut();
+                        if let Some(m) = Arc::get_mut(entry) {
+                            m.push(Arc::clone(&message_pair.message));
+                        }
+                    },
+                    Entry::Vacant(entry) => {
+                        entry.insert(Arc::new(vec![Arc::clone(&message_pair.message)]));
+                    }
+                }
+            }
+        }
+
         // Perform one step by processing each GameObject in the state once.
         fn step_engine(states: &Arc<Vec<GameObjectWithID>>, sends: &[Sender<GameObjectWithState>], 
             receiver: &Receiver<UpdateResultWithID>, time: f32, messages: &Arc<MessageSet>)
@@ -418,6 +436,40 @@ mod tests {
             else {
                 assert!(false);
             }
+        }
+    }
+
+    // Test pushing a message from outside with engine (e.g. user input)
+    #[test]
+    fn external_message_test() {
+        let mut initial_state = vec![];
+        let initial_object = MessageGameObject {
+            value: 0
+        };
+        let initial_object = Box::new(initial_object) as Box<GameObject>;
+        let initial_object = Arc::new(initial_object);
+        let initial_object = GameObjectWithID {
+            id: 0,
+            game_object: initial_object
+        };
+        initial_state.push(initial_object);
+        let initial_state = Arc::new(initial_state);
+        let mut engine = Fungine::new(&initial_state);
+        let message = MessageWithID {
+            id: 0u64,
+            message: Arc::new(Box::new(TestMessage {
+                value: 8
+            }))
+        };
+        engine.push_message(message);
+        let next_states = engine.run_steps(1, 1f32);
+        let next_state = next_states[0].clone();
+        let next_state: Box<GameObject> = (next_state.game_object).box_clone();
+        if let Some(next_object) = next_state.downcast_ref::<MessageGameObject>() {
+            assert_eq!(8, next_object.value);
+        }
+        else {
+            assert!(false);
         }
     }
 }
